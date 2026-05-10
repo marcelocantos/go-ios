@@ -142,7 +142,12 @@ func (g GlobalDispatcher) Dispatch(msg Message) {
 	if msg.HasError() {
 		log.Error(msg.Payload[0])
 	}
-	if msg.PayloadHeader.MessageType == UnknownTypeOne || msg.PayloadHeader.MessageType == ResponseWithReturnValueInPayload {
+	if msg.PayloadHeader.MessageType == UnknownTypeOne || msg.PayloadHeader.MessageType == ResponseWithReturnValueInPayload || msg.PayloadHeader.MessageType == Methodinvocation {
+		// Forward Methodinvocation too: on iOS-17+ over the RSD path,
+		// instruments-channel callbacks (e.g. BackBoard's
+		// applicationStateNotification:) arrive on the global channel
+		// as Methodinvocation messages. Without this branch they are
+		// logged at trace level and silently dropped.
 		g.dtxConnection.Dispatch(msg)
 	}
 }

@@ -20,9 +20,26 @@ func ListenAppStateNotifications(device ios.DeviceEntry) (func() (map[string]int
 	if err != nil {
 		return nil, nil, err
 	}
-	dispatcher := channelDispatcher{messageChannel: make(chan dtx.Message), closeChannel: make(chan struct{})}
+	// messageChannel is buffered so that BackBoard's initial state-
+	// enumeration burst (one entry per managed app, can be 30+ on
+	// iPad-class devices) can land before the caller starts draining
+	// via Receive(). An unbuffered channel here deadlocks the DTX
+	// reader goroutine the moment the first notification arrives.
+	dispatcher := channelDispatcher{messageChannel: make(chan dtx.Message, 256), closeChannel: make(chan struct{})}
 	conn.AddDefaultChannelReceiver(dispatcher)
-	channel := conn.RequestChannelIdentifier(mobileNotificationsChannel, channelDispatcher{})
+	// On iOS-17+ (RSD / dtservicehub) BackBoard's applicationStateNotification:
+	// callbacks arrive on the global channel (code 0) as Methodinvocation
+	// messages, not on the assigned mobilenotifications channel. Setting
+	// MessageDispatcher routes the global-channel forward (see
+	// GlobalDispatcher.Dispatch) into our handler.
+	conn.MessageDispatcher = dispatcher
+	// Pass the same populated dispatcher to the per-channel route. On the
+	// iOS-17+ RSD path (com.apple.instruments.dtservicehub) BackBoard
+	// dispatches applicationStateNotification: messages on the assigned
+	// channel code rather than the default channel; passing a zero-value
+	// channelDispatcher (with nil messageChannel) deadlocks the DTX
+	// reader on `nil_chan <- msg` the moment any notification arrives.
+	channel := conn.RequestChannelIdentifier(mobileNotificationsChannel, dispatcher)
 	resp, err := channel.MethodCall("setApplicationStateNotificationsEnabled:", true)
 	if err != nil {
 		log.Errorf("resp:%+v, %+v", resp, resp.Payload[0])
@@ -66,5 +83,15 @@ func (dispatcher *channelDispatcher) Close() error {
 }
 
 func (dispatcher channelDispatcher) Dispatch(msg dtx.Message) {
-	dispatcher.messageChannel <- msg
+	// Defend against the zero-value dispatcher pattern: a nil channel
+	// would block the DTX reader goroutine forever, taking the whole
+	// connection down silently. Drop the message instead.
+	if dispatcher.messageChannel == nil {
+		return
+	}
+	select {
+	case dispatcher.messageChannel <- msg:
+	default:
+		// Buffer full — drop rather than wedge the DTX reader.
+	}
 }
