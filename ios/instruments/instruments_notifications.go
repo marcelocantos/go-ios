@@ -42,13 +42,16 @@ func ListenAppStateNotifications(device ios.DeviceEntry) (func() (map[string]int
 	channel := conn.RequestChannelIdentifier(mobileNotificationsChannel, dispatcher)
 	resp, err := channel.MethodCall("setApplicationStateNotificationsEnabled:", true)
 	if err != nil {
-		log.Errorf("resp:%+v, %+v", resp, resp.Payload[0])
+		// resp.Payload may be empty when the channel-open RPC times out
+		// before any response arrives — the original error path indexed
+		// resp.Payload[0] unconditionally and panicked. Defend against it.
+		log.Errorf("setApplicationStateNotificationsEnabled: failed: resp=%+v err=%v", resp, err)
 		return nil, nil, err
 	}
 	log.Debugf("appstatenotifications enabled successfully: %+v", resp)
 	resp, err = channel.MethodCall("setMemoryNotificationsEnabled:", true)
 	if err != nil {
-		log.Errorf("resp:%+v, %+v", resp, resp.Payload[0])
+		log.Errorf("setMemoryNotificationsEnabled: failed: resp=%+v err=%v", resp, err)
 		return nil, nil, err
 	}
 	log.Debugf("memory notifications enabled: %+v", resp)
