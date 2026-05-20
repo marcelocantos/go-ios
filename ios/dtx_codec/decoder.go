@@ -81,11 +81,35 @@ func ReadMessage(reader io.Reader) (Message, error) {
 			return Message{}, err
 		}
 
-		payload, err := nskeyedarchiver.Unarchive(payloadBytes)
-		if err != nil {
-			return Message{}, err
+		// Dispatch on MessageType — only the default case is an
+		// NSKeyedArchive payload. UnknownTypeOne carries raw bytes
+		// (e.g. activitytracetap binary frames) and
+		// LZ4CompressedMessage carries an lz4 blob; passing either
+		// to nskeyedarchiver.Unarchive misclassifies the first byte
+		// (e.g. `{` or `(`) as a text-property-list opener and
+		// fails with "error parsing text property list" — which
+		// propagates up to dtx_codec.Connection.reader and tears
+		// down the entire DTX connection. Sister function
+		// DecodeNonBlocking (below) has always dispatched on
+		// MessageType; ReadMessage was missing it.
+		switch result.PayloadHeader.MessageType {
+		case UnknownTypeOne:
+			result.Payload = []interface{}{payloadBytes}
+		case LZ4CompressedMessage:
+			uncompressed, derr := Decompress(payloadBytes)
+			if derr == nil {
+				log.Debugf("lz4 compressed %d bytes / %d uncompressed", len(payloadBytes), len(uncompressed))
+			} else {
+				log.Debugf("skipping lz4 compressed msg with %d bytes, decompression error %v", len(payloadBytes), derr)
+			}
+			result.Payload = []interface{}{payloadBytes}
+		default:
+			payload, err := nskeyedarchiver.Unarchive(payloadBytes)
+			if err != nil {
+				return Message{}, err
+			}
+			result.Payload = payload
 		}
-		result.Payload = payload
 	}
 
 	return result, nil
