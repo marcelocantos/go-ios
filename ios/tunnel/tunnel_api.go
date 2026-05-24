@@ -225,6 +225,10 @@ type TunnelManager struct {
 	userspaceTUN         bool
 	closeOnce            sync.Once
 	portOffset           int
+	// getVersion resolves a device's product version. Injectable so the
+	// reconcile/rebuild logic can be unit-tested without a real device;
+	// defaults to ios.GetProductVersion.
+	getVersion func(ios.DeviceEntry) (*semver.Version, error)
 }
 
 // NewTunnelManager creates a new TunnelManager instance for setting up device tunnels for all connected devices
@@ -238,6 +242,7 @@ func NewTunnelManager(pm PairRecordManager, userspaceTUN bool) *TunnelManager {
 		startTunnelTimeout: 10 * time.Second,
 		userspaceTUN:       userspaceTUN,
 		portOffset:         1,
+		getVersion:         ios.GetProductVersion,
 	}
 }
 
@@ -282,8 +287,20 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 	}
 	for _, d := range devices.DeviceList {
 		udid := d.Properties.SerialNumber
-		if _, exists := localTunnels[udid]; exists {
-			continue
+		if existing, exists := localTunnels[udid]; exists {
+			if existing.IsAlive() {
+				continue
+			}
+			// The tunnel's lifeline to the device died (e.g. sleep/wake,
+			// USB renegotiation, a usbmuxd hiccup) while the device stayed
+			// in the device list. The local listener is still up but
+			// black-holes traffic. Tear it down and fall through to rebuild
+			// — otherwise it stays a zombie until the device leaves the
+			// list or the daemon restarts.
+			log.WithField("udid", udid).
+				Warn("existing tunnel is dead (device lifeline lost); rebuilding")
+			_ = m.stopTunnel(existing)
+			delete(localTunnels, udid)
 		}
 		if m.userspaceTUN && d.UserspaceTUNPort == 0 {
 			d.UserspaceTUNPort = ios.HttpApiPort() + m.portOffset
@@ -339,7 +356,7 @@ func (m *TunnelManager) startTunnel(ctx context.Context, device ios.DeviceEntry)
 	log.WithField("udid", device.Properties.SerialNumber).Info("start tunnel")
 	startTunnelCtx, cancel := context.WithTimeout(ctx, m.startTunnelTimeout)
 	defer cancel()
-	version, err := ios.GetProductVersion(device)
+	version, err := m.getVersion(device)
 	if err != nil {
 		return Tunnel{}, fmt.Errorf("startTunnel: failed to get device version: %w", err)
 	}

@@ -194,8 +194,26 @@ func connectToUserspaceTunnelLockdown(ctx context.Context, device ios.DeviceEntr
 		return Tunnel{}, fmt.Errorf("could not exchange tunnel parameters. %w", err)
 	}
 	const prefixLength = 64
+
+	// Watch the lifeline. connToDevice (the lockdown/coreDeviceProxy
+	// connection) carries every IP packet for this tunnel; the netstack's
+	// dispatch loop is its sole reader. When that read fails — device
+	// sleep/wake, USB renegotiation, a usbmuxd hiccup — the tunnel is dead,
+	// but its local listener stays up and would silently black-hole new
+	// connections (an HTTP/2 handshake against it hangs forever). deathWatch
+	// closes done on the first read error so the TunnelManager can rebuild.
+	done := make(chan struct{})
+	udid := device.Properties.SerialNumber
+	watched := &deathWatchConn{
+		ReadWriteCloser: connToDevice,
+		onDeath: func() {
+			slog.Warn("tunnel lifeline to device closed; marking tunnel dead", "udid", udid)
+			close(done)
+		},
+	}
+
 	iface := UserSpaceTUNInterface{}
-	err = iface.Init(uint32(tunnelInfo.ClientParameters.Mtu), connToDevice, tunnelInfo.ClientParameters.Address, prefixLength)
+	err = iface.Init(uint32(tunnelInfo.ClientParameters.Mtu), watched, tunnelInfo.ClientParameters.Address, prefixLength)
 	if err != nil {
 		return Tunnel{}, fmt.Errorf("could not setup tunnel interface. %w", err)
 	}
@@ -217,7 +235,27 @@ func connectToUserspaceTunnelLockdown(ctx context.Context, device ios.DeviceEntr
 		RsdPort: int(tunnelInfo.ServerRSDPort),
 		Udid:    device.Properties.SerialNumber,
 		closer:  closeFunc,
+		done:    done,
 	}, nil
+}
+
+// deathWatchConn wraps the tunnel's lifeline connection and invokes onDeath
+// exactly once, the first time a Read returns an error. The netstack's
+// dispatch loop is the sole continuous reader of the lifeline, so its first
+// read error is the earliest reliable signal that the path to the device is
+// gone.
+type deathWatchConn struct {
+	io.ReadWriteCloser
+	once    sync.Once
+	onDeath func()
+}
+
+func (c *deathWatchConn) Read(p []byte) (int, error) {
+	n, err := c.ReadWriteCloser.Read(p)
+	if err != nil {
+		c.once.Do(c.onDeath)
+	}
+	return n, err
 }
 
 func listenToConns(iface UserSpaceTUNInterface, listener net.Listener) error {

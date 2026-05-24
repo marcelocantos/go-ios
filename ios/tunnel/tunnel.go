@@ -36,6 +36,29 @@ type Tunnel struct {
 	UserspaceTUN     bool `json:"userspaceTun"`
 	UserspaceTUNPort int  `json:"userspaceTunPort"`
 	closer           func() error
+	// done is closed when the tunnel's lifeline to the device dies (the
+	// underlying lockdown/coreDeviceProxy connection errors). It lets the
+	// TunnelManager detect a zombie tunnel — one whose local listener is
+	// still up but whose path to the device is dead — and rebuild it.
+	// nil for tunnels that don't track liveness (assumed always alive).
+	done <-chan struct{}
+}
+
+// IsAlive reports whether the tunnel's lifeline to the device is still up.
+// A tunnel whose lifeline has died still has a live local listener, so it
+// accepts connections and silently black-holes them; IsAlive lets the
+// manager tell the difference and rebuild. Tunnels created without liveness
+// tracking (done == nil) are reported alive.
+func (t Tunnel) IsAlive() bool {
+	if t.done == nil {
+		return true
+	}
+	select {
+	case <-t.done:
+		return false
+	default:
+		return true
+	}
 }
 
 // Close closes the connection to the device and removes the virtual network interface from the host
