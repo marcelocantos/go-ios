@@ -1,0 +1,391 @@
+# hygiene.yaml — declared, drift-validated hygiene posture for go-ios.
+# Schema reference: the `hygiene` skill (~/.claude/skills/hygiene/SKILL.md).
+# Validate with `/hygiene`; aggregate the fleet with `/hygiene fleet`. Tracks
+# steady-state ("we maintain X"), the complement to bullseye's aspirational
+# targets ("achieve X").
+#
+# Fork of github.com/danielpaulus/go-ios; module path still
+# github.com/danielpaulus/go-ios. Default branch is `main`.
+#
+# Tiers are PER DIMENSION (schema v1): a dimension's held tier is the highest T
+# such that every item in it with tier <= T is satisfied. `floors` is the
+# per-dimension ratchet (below floor => DRIFT); `aspires` is the gap horizon;
+# `enforce` is intent-only and does not affect tiers.
+
+schema_version: 1
+
+repo: go-ios
+aspires: 3
+floors:            # per-dimension held-tier ratchet; below floor => DRIFT
+  correctness: 1   # Linux `go test -tags=fast`; Windows tests are commented out
+  security: 2      # go.sum pinned; no scanners yet
+  quality: 2       # gofmt + golangci-lint in PR CI
+  deps: 2          # go.sum committed; no Dependabot
+  release: 2       # CI builds win/mac/linux + npm publish on push to main
+  governance: 2    # MIT + README + gitignore + CONTRIBUTING
+  build: 2         # Makefile `build`; go/toolchain pinned in go.mod
+  docs: 1          # README; no godoc-in-CI
+  perf: 0          # no benchmark suite
+  vcs: 2           # .githooks/pre-commit present
+  agent: 0         # no AGENTS.md / CLAUDE.md / bullseye.yaml
+
+tiers:
+  1: baseline    # LICENSE + README + .gitignore; tests build & run
+  2: maintained  # full matrix, lint/format, release + governance
+  3: hardened    # security scanning, SBOM/signing, fuzzing, perf
+
+items:
+
+  # ============================== CORRECTNESS =============================
+  - id: correctness.linux-fast-tests
+    dim: correctness
+    desc: Fast unit tests (`go test -tags=fast ./...`) run on Linux in PR CI
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 1
+    evidence: {ci_step: {workflow: test.yml, name: Run fast tests}}
+
+  - id: correctness.windows-build
+    dim: correctness
+    desc: Windows PR job compiles the CLI (`go build`)
+    state: present
+    cadence: continuous
+    enforce: warning
+    tier: 1
+    evidence: {ci_job: test.yml#test_on_windows}
+
+  - id: correctness.windows-tests
+    dim: correctness
+    desc: Fast unit tests also run on Windows in PR CI
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: >-
+      test.yml `test_on_windows` only `go build`; the `go test -tags=fast`
+      step is commented out.
+    evidence:
+      {absent: {ci_step: {workflow: test.yml, name: Run fast tests on Windows}}}
+
+  - id: correctness.macos-unit-tests
+    dim: correctness
+    desc: Fast unit tests run on macOS in PR CI
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: test.yml has no macOS unit-test job; macOS is used only in release.yml and real-device.yml.
+    evidence: {absent: {ci_job: test.yml#test_on_macos}}
+
+  - id: correctness.real-device
+    dim: correctness
+    desc: Dispatchable real-device install/list smoke (Windows + Linux via ngrok)
+    state: present
+    cadence: periodic:on-demand
+    enforce: informational
+    tier: 3
+    evidence: {ci_job: real-device.yml#test_on_linux}
+
+  - id: correctness.fuzzing
+    dim: correctness
+    desc: Fuzz harnesses over protocol parsers (DTX, nskeyedarchiver, plist, XPC)
+    state: planned
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: No fuzz targets or CI fuzz job; parsers are unit-tested from captured fixtures only.
+    evidence: {absent: {ci_job: test.yml#fuzz}}
+
+  # =========================== SECURITY / SUPPLY ==========================
+  - id: security.dep-pinning
+    dim: security
+    desc: go.sum committed — reproducible, pinned module graph
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: go.sum}}
+
+  - id: security.dep-vuln-scan
+    dim: security
+    desc: Vulnerability scanning of Go modules (govulncheck)
+    state: planned
+    cadence: periodic:30d
+    enforce: warning
+    tier: 3
+    reason: go.sum is pinned but no govulncheck (or equivalent) job runs in CI.
+    evidence: {absent: {scanner: {tool: govulncheck}}}
+
+  - id: security.secret-scan
+    dim: security
+    desc: Secret scanning (gitleaks) in pre-commit and/or CI
+    state: planned
+    cadence: continuous
+    enforce: blocking
+    tier: 3
+    reason: No gitleaks config or CI job; .gitignore covers p12/pem/key but history is not scanned.
+    evidence: {absent: {scanner: {tool: gitleaks}}}
+
+  - id: security.sast-codeql
+    dim: security
+    desc: CodeQL static analysis for Go
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: No CodeQL workflow; golangci-lint currently enables only forbidigo.
+    evidence: {absent: {ci_job: "test.yml#codeql"}}
+
+  - id: security.actions-perms
+    dim: security
+    desc: GitHub Actions default token permissions scoped to least privilege
+    state: planned
+    cadence: once-must-hold
+    enforce: warning
+    tier: 3
+    reason: No top-level `permissions:` block in the workflows; inherits repo default.
+    evidence:
+      {absent: {file: {path: .github/workflows/test.yml, matches: '(?m)^permissions:'}}}
+
+  - id: security.signed-releases
+    dim: security
+    desc: Release artifacts carry provenance / are signed (cosign/sigstore)
+    state: planned
+    cadence: per-release
+    enforce: informational
+    tier: 3
+    reason: release.yml uploads zips and publishes npm; no signing/attestation step.
+    evidence: {absent: {ci_step: {workflow: release.yml, name: Sign}}}
+
+  # ============================== CODE QUALITY ============================
+  - id: quality.format
+    dim: quality
+    desc: Sources are gofmt-clean, enforced in PR CI
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_step: {workflow: test.yml, name: Verify code formatting}}
+
+  - id: quality.lint
+    dim: quality
+    desc: golangci-lint runs on every PR (config enables forbidigo)
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_step: {workflow: test.yml, name: Run golangci-lint}}
+
+  # =========================== DEPENDENCY HEALTH ==========================
+  - id: deps.lockfile
+    dim: deps
+    desc: go.sum committed for the root module
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: go.sum}}
+
+  - id: deps.dependabot
+    dim: deps
+    desc: Dependabot (or equivalent) keeps Go modules and Actions current
+    state: planned
+    cadence: periodic:30d
+    enforce: informational
+    tier: 3
+    reason: >-
+      No .github/dependabot.yml in tree (stale dependabot branches exist on
+      origin from earlier experiments).
+    evidence: {absent: {file: {path: .github/dependabot.yml}}}
+
+  # ========================== RELEASE & VERSIONING =======================
+  - id: release.ci-built
+    dim: release
+    desc: Release binaries are built by CI on Windows, macOS, and Linux
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {ci_job: release.yml#build_on_linux_and_release}
+
+  - id: release.npm
+    dim: release
+    desc: npm package `go-ios` is published from the same release workflow
+    state: present
+    cadence: per-release
+    enforce: informational
+    tier: 2
+    evidence: {ci_step: {workflow: release.yml, name: Publish NPM}}
+
+  - id: release.changelog
+    dim: release
+    desc: A maintained CHANGELOG records user-visible changes per release
+    state: planned
+    cadence: per-release
+    enforce: warning
+    tier: 3
+    reason: History lives in git + GitHub releases; no curated CHANGELOG.md.
+    evidence: {absent: {file: {path: CHANGELOG.md}}}
+
+  # ============================ GOVERNANCE / META ========================
+  - id: governance.license
+    dim: governance
+    desc: MIT LICENSE present
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: LICENSE, matches: 'MIT License'}}
+
+  - id: governance.readme
+    dim: governance
+    desc: README present and current
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: README.md}}
+
+  - id: governance.gitignore
+    dim: governance
+    desc: .gitignore covers binaries, IDE/OS files, secrets (p12/pem/key)
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: .gitignore}}
+
+  - id: governance.contributing
+    dim: governance
+    desc: CONTRIBUTING.md documents the PR workflow
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: CONTRIBUTING.md}}
+
+  - id: governance.squash-only
+    dim: governance
+    desc: Repo is squash-merge only, with delete-branch-on-merge
+    state: planned
+    cadence: once-must-hold
+    enforce: warning
+    tier: 3
+    reason: >-
+      Fork of danielpaulus/go-ios; GitHub still allows merge commits and
+      rebase merges, and does not delete-on-merge.
+    evidence: {absent: {gh_setting: {key: allow_merge_commit, equals: false}}}
+
+  - id: governance.security-md
+    dim: governance
+    desc: SECURITY.md documents the vulnerability-disclosure process
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: Public repo without a published disclosure policy.
+    evidence: {absent: {file: {path: SECURITY.md}}}
+
+  # ================================= BUILD ===============================
+  - id: build.makefile
+    dim: build
+    desc: Makefile `build` produces the `ios` CLI and `go-ncm` driver
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {make_target: build}
+
+  - id: build.go-version-pinned
+    dim: build
+    desc: Go language and toolchain versions pinned in go.mod
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: go.mod, matches: '(?m)^toolchain '}}
+
+  - id: build.restapi-ci
+    dim: build
+    desc: restapi sibling module compiles in PR CI
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: >-
+      restapi is a separate module (go.work); test.yml only builds the root
+      CLI. restapi compile happens in the dispatch-only deploy.yml job.
+    evidence: {absent: {ci_step: {workflow: test.yml, name: Build restapi}}}
+
+  # ============================ DOCUMENTATION ============================
+  - id: docs.readme
+    dim: docs
+    desc: Root README documents install, CLI, and design principles
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: README.md}}
+
+  - id: docs.godoc-ci
+    dim: docs
+    desc: go doc / pkg.go.dev surface builds cleanly in CI
+    state: planned
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: Docs are not built or link-checked in CI.
+    evidence: {absent: {ci_step: {workflow: test.yml, name: Docs}}}
+
+  # ============================== PERFORMANCE ===========================
+  - id: perf.benchmarks
+    dim: perf
+    desc: Go benchmark suite exists and runs
+    state: planned
+    cadence: per-release
+    enforce: informational
+    tier: 3
+    reason: No *_bench_test.go suite or CI bench job.
+    evidence: {absent: {ci_job: test.yml#bench}}
+
+  # ============================== VCS / HISTORY =========================
+  - id: vcs.pre-commit-hook
+    dim: vcs
+    desc: Committed git hooks (.githooks) gate gofmt + golangci-lint locally
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: .githooks/pre-commit}}
+
+  - id: vcs.lfs-binaries
+    dim: vcs
+    desc: Large/binary fixtures (WDA ipa, app-signers) tracked via Git LFS
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: testdata/ ships opaque binaries (~15MB) without .gitattributes/LFS.
+    evidence: {absent: {file: {path: .gitattributes}}}
+
+  # =================== AGENT-READINESS / ONBOARDING ====================
+  - id: agent.agents-md
+    dim: agent
+    desc: AGENTS.md (or CLAUDE.md) present so project conventions are discoverable
+    state: planned
+    cadence: once-must-hold
+    enforce: warning
+    tier: 3
+    reason: Fork has neither AGENTS.md nor CLAUDE.md; conventions live in CONTRIBUTING.md + README.
+    evidence: {absent: {file: {path: AGENTS.md}}}
+
+  - id: agent.bullseye
+    dim: agent
+    desc: bullseye.yaml present (convergence targets discoverable)
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: No bullseye.yaml; this is a fork of an upstream library, not yet on the intent ledger.
+    evidence: {absent: {file: {path: bullseye.yaml}}}
