@@ -2560,13 +2560,22 @@ func resetLocation(device ios.DeviceEntry) {
 	exitIfError("Resetting location failed with", err)
 }
 
-func processList(device ios.DeviceEntry, applicationsOnly bool) {
-	service, err := instruments.NewDeviceInfoService(device)
-	defer service.Close()
+// buildProcessList checks the error from opening the device-info service
+// before deferring its Close(). Checking first matters: if
+// instruments.NewDeviceInfoService fails, service is nil, and deferring
+// Close() on it before this check would bind the defer to a nil receiver —
+// a call to (*instruments.DeviceInfoService)(nil).Close() dereferences a nil
+// field and panics instead of just propagating the open error.
+func buildProcessList(service *instruments.DeviceInfoService, err error, applicationsOnly bool) ([]instruments.ProcessInfo, error) {
 	if err != nil {
-		exitIfError("failed opening deviceInfoService for getting process list", err)
+		return nil, err
 	}
+	defer service.Close()
+
 	processList, err := service.ProcessList()
+	if err != nil {
+		return nil, err
+	}
 	if applicationsOnly {
 		var applicationProcessList []instruments.ProcessInfo
 		for _, processInfo := range processList {
@@ -2576,11 +2585,18 @@ func processList(device ios.DeviceEntry, applicationsOnly bool) {
 		}
 		processList = applicationProcessList
 	}
+	return processList, nil
+}
+
+func processList(device ios.DeviceEntry, applicationsOnly bool) {
+	service, err := instruments.NewDeviceInfoService(device)
+	list, err := buildProcessList(service, err, applicationsOnly)
+	exitIfError("failed getting process list", err)
 
 	if JSONdisabled {
-		outputProcessListNoJSON(device, processList)
+		outputProcessListNoJSON(device, list)
 	} else {
-		fmt.Println(convertToJSONString(processList))
+		fmt.Println(convertToJSONString(list))
 	}
 }
 
