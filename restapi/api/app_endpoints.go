@@ -104,12 +104,7 @@ func KillApp(c *gin.Context) {
 		return
 	}
 
-	for _, app := range response {
-		if app.CFBundleIdentifier == bundleID {
-			processName = app.CFBundleExecutable
-			break
-		}
-	}
+	processName = processNameForBundle(response, bundleID)
 
 	if processName == "" {
 		c.JSON(http.StatusNotFound, GenericResponse{Message: bundleID + " is not installed"})
@@ -234,4 +229,17 @@ func UninstallApp(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, GenericResponse{Message: bundleID + " uninstalled successfully"})
+}
+
+// processNameForBundle returns CFBundleExecutable for the first app whose
+// CFBundleIdentifier matches bundleID. AppInfo exposes those as methods, not
+// fields — comparing the func values does not compile against the workspace
+// library.
+func processNameForBundle(apps []installationproxy.AppInfo, bundleID string) string {
+	for _, app := range apps {
+		if app.CFBundleIdentifier() == bundleID {
+			return app.CFBundleExecutable()
+		}
+	}
+	return ""
 }

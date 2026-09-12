@@ -1,2 +1,4 @@
-**/docs
+# swag regenerates these; keep docs.go so the module compiles locally
+docs/swagger.json
+docs/swagger.yaml
 *.log

@@ -5,7 +5,7 @@ go 1.22.0
 toolchain go1.22.5
 
 require (
-	github.com/danielpaulus/go-ios v1.0.91
+	github.com/danielpaulus/go-ios v0.0.0
 	github.com/gin-gonic/gin v1.8.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/swaggo/files v0.0.0-20220728132757-551d4a08d97a
