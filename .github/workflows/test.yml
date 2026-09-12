@@ -63,6 +63,9 @@ jobs:
       - name: Run fast tests
         run: go test -v -tags=fast ./...
 
+      - name: Run XCUITest handshake unit tests
+        run: go test -tags=fast ./ios/testmanagerd/...
+
       - name: Build and test REST API
         run: |
           cd restapi

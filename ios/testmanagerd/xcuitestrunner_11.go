@@ -38,12 +38,12 @@ func runXCUIWithBundleIdsXcode11Ctx(
 	log.Debug("connections ready")
 	ideDaemonProxy2 := newDtxProxyWithConfig(conn2, testConfig, config.Listener)
 	ideDaemonProxy2.ideInterface.testConfig = testConfig
-	// TODO: fixme
-	protocolVersion := uint64(25)
-	_, err = ideDaemonProxy.daemonConnection.initiateSessionWithIdentifier(testSessionId, protocolVersion)
+	offeredProtocolVersion := uint64(25)
+	negotiated, err := ideDaemonProxy.daemonConnection.initiateSessionWithIdentifier(testSessionId, offeredProtocolVersion)
 	if err != nil {
 		return make([]TestSuite, 0), fmt.Errorf("RunXCUIWithBundleIdsXcode11Ctx: cannot initiate a test session: %w", err)
 	}
+	protocolVersion := xcode11HandshakeProtocolVersion(negotiated)
 
 	pControl, err := instruments.NewProcessControl(config.Device)
 	if err != nil {
@@ -65,7 +65,7 @@ func runXCUIWithBundleIdsXcode11Ctx(
 	ideInterfaceChannel := ideDaemonProxy.dtxConnection.ForChannelRequest(proxyDispatcher{id: "emty"})
 
 	log.Debug("start executing testplan")
-	err = ideDaemonProxy2.daemonConnection.startExecutingTestPlanWithProtocolVersion(ideInterfaceChannel, 25)
+	err = ideDaemonProxy2.daemonConnection.startExecutingTestPlanWithProtocolVersion(ideInterfaceChannel, protocolVersion)
 	if err != nil {
 		return make([]TestSuite, 0), fmt.Errorf("RunXCUIWithBundleIdsXcode11Ctx: cannot start executing test plan: %w", err)
 	}
@@ -128,4 +128,14 @@ func startTestRunner11(pControl *instruments.ProcessControl, xctestConfigPath st
 	}
 
 	return pControl.StartProcess(bundleID, env, args, opts)
+}
+
+// xcode11HandshakeProtocolVersion chooses the protocol version used after
+// initiateSessionWithIdentifier replies. The Xcode 11 path used to ignore
+// that reply and keep a hardcoded 25 (TODO: fixme).
+func xcode11HandshakeProtocolVersion(negotiated uint64) uint64 {
+	if negotiated != 0 {
+		return negotiated
+	}
+	return 25
 }
