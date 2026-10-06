@@ -244,7 +244,7 @@ func createTlsConfig(info tunnelListener) (*tls.Config, error) {
 	return conf, nil
 }
 
-func forwardDataToDevice(ctx context.Context, mtu uint64, r io.Reader, conn quic.Connection) error {
+func forwardDataToDevice(ctx context.Context, mtu uint64, r io.Reader, conn *quic.Conn) error {
 	packet := make([]byte, mtu)
 	for {
 		select {
@@ -263,7 +263,7 @@ func forwardDataToDevice(ctx context.Context, mtu uint64, r io.Reader, conn quic
 	}
 }
 
-func forwardDataToInterface(ctx context.Context, conn quic.Connection, w io.Writer) error {
+func forwardDataToInterface(ctx context.Context, conn *quic.Conn, w io.Writer) error {
 	for {
 		select {
 		case <-ctx.Done():
