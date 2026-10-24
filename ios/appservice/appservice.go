@@ -117,6 +117,12 @@ func (c *Connection) launchApp(bundleId string, args []interface{}, env map[stri
 	if err != nil {
 		return 0, fmt.Errorf("launchApp: failed to read response: %w", err)
 	}
+	// A launch can be rejected by CoreDevice (e.g. code 10004 when the
+	// previous instance is still tearing down). Surface that error instead
+	// of the opaque "could not get pid from response".
+	if err := getError(m); err != nil {
+		return 0, fmt.Errorf("launchApp: %w", err)
+	}
 	pid, err := pidFromResponse(m)
 	if err != nil {
 		return 0, fmt.Errorf("launchApp: failed to get PID: %w", err)
@@ -299,9 +305,39 @@ func pidFromResponse(response map[string]interface{}) (int64, error) {
 	return pid, nil
 }
 
-func getError(response map[string]interface{}) error {
-	if e, ok := response["CoreDevice.error"].(map[string]interface{}); ok {
-		return fmt.Errorf("device returned error: %+v", e)
+// CoreDeviceError is an error returned by the device in a CoreDevice.error
+// response field.
+type CoreDeviceError struct {
+	Domain      string
+	Code        int64
+	Description string
+}
+
+func (e *CoreDeviceError) Error() string {
+	desc := e.Description
+	if desc == "" {
+		desc = "no description"
 	}
-	return nil
+	return fmt.Sprintf("device returned error: %s code %d: %s", e.Domain, e.Code, desc)
+}
+
+func getError(response map[string]interface{}) error {
+	e, ok := response["CoreDevice.error"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	cde := &CoreDeviceError{}
+	cde.Domain, _ = e["domain"].(string)
+	switch code := e["code"].(type) {
+	case int64:
+		cde.Code = code
+	case uint64:
+		cde.Code = int64(code)
+	case int:
+		cde.Code = int64(code)
+	}
+	if info, ok := e["userInfo"].(map[string]interface{}); ok {
+		cde.Description, _ = info["NSLocalizedDescription"].(string)
+	}
+	return cde
 }
